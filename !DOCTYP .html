@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Smart Water</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="manifest" href="manifest.json">
+
+  <style>
+    body { background:#0f172a; color:white; text-align:center; font-family:Arial; }
+    .card { background:#1e293b; padding:20px; margin:10px; border-radius:10px; display:inline-block; }
+    .alarm { color:red; font-weight:bold; }
+  </style>
+</head>
+
+<body>
+
+<h1>💧 Smart Water</h1>
+
+<div id="loginBox">
+  <input id="user" placeholder="username">
+  <input id="pass" type="password" placeholder="password">
+  <button onclick="login()">Login</button>
+</div>
+
+<div id="dashboard" style="display:none;">
+
+  <div class="card">Flow <h2 id="flow">0</h2></div>
+  <div class="card">Total <h2 id="total">0</h2></div>
+  <div class="card">Status <h2 id="alarm">NORMAL</h2></div>
+
+  <button onclick="downloadCSV()">Download CSV</button>
+
+  <canvas id="chart"></canvas>
+
+</div>
+
+<script>
+const API = "http://localhost:3000";
+let token="";
+
+let chart = new Chart(document.getElementById('chart'), {
+  type:'line',
+  data:{labels:[], datasets:[{label:"Flow", data:[]}]}
+});
+
+function login(){
+  fetch(API+"/login",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({username:user.value,password:pass.value})
+  })
+  .then(res=>res.json())
+  .then(d=>{
+    if(!d.token){alert("Login gagal");return;}
+    token=d.token;
+    loginBox.style.display="none";
+    dashboard.style.display="block";
+    loadHistory();
+    setInterval(update,2000);
+  });
+}
+
+async function update(){
+  const res=await fetch(API+"/latest");
+  const d=await res.json();
+
+  flow.innerText=d.flow.toFixed(2);
+  total.innerText=d.total.toFixed(2);
+
+  if(d.alarm==1){
+    alarm.innerText="ALARM 🚨";
+    alarm.classList.add("alarm");
+  }else{
+    alarm.innerText="NORMAL";
+    alarm.classList.remove("alarm");
+  }
+
+  chart.data.labels.push(new Date().toLocaleTimeString());
+  chart.data.datasets[0].data.push(d.flow);
+
+  if(chart.data.labels.length>15){
+    chart.data.labels.shift();
+    chart.data.datasets[0].data.shift();
+  }
+
+  chart.update();
+}
+
+async function loadHistory(){
+  const res=await fetch(API+"/history",{headers:{Authorization:token}});
+  const data=await res.json();
+
+  data.reverse().forEach(d=>{
+    chart.data.labels.push(new Date(d.time).toLocaleTimeString());
+    chart.data.datasets[0].data.push(d.flow);
+  });
+
+  chart.update();
+}
+
+function downloadCSV(){
+  window.open(API+"/export");
+}
+</script>
+
+</body>
+</html>
