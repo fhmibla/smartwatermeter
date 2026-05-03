@@ -13,16 +13,16 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const SECRET = "smartwater_secret";
 
-// ===== FILTER ANTI DOUBLE =====
-let lastSource = "";
-let lastTime = 0;
-
-// ===== MONGODB =====
+// ======================
+// MONGODB
+// ======================
 mongoose.connect(process.env.MONGO_URL)
 .then(() => console.log("✅ MongoDB Connected"))
 .catch(err => console.log("❌ MongoDB Error:", err.message));
 
-// ===== SCHEMA =====
+// ======================
+// SCHEMA
+// ======================
 const Data = mongoose.model('Data', {
   flow: Number,
   total: Number,
@@ -31,10 +31,20 @@ const Data = mongoose.model('Data', {
   time: { type: Date, default: Date.now }
 });
 
-// ===== MQTT =====
-const client = mqtt.connect('mqtt://broker.emqx.io');
+// ======================
+// LAST DATA
+// ======================
+let lastData = {
+  flow: 0,
+  total: 0,
+  alarm: 0,
+  source: "MQTT"
+};
 
-let lastData = { flow: 0, total: 0, alarm: 0, source: "MQTT" };
+// ======================
+// MQTT
+// ======================
+const client = mqtt.connect('mqtt://broker.emqx.io');
 
 client.on('connect', () => {
   console.log("✅ MQTT Connected");
@@ -43,66 +53,26 @@ client.on('connect', () => {
 
 client.on('message', async (topic, message) => {
   try {
-
-    if (lastSource === "GSM" && Date.now() - lastTime < 5000) return;
-
     const val = message.toString();
 
     if (topic === 'smartwater/flow') lastData.flow = Number(val);
     if (topic === 'smartwater/total') lastData.total = Number(val);
     if (topic === 'smartwater/alarm') lastData.alarm = Number(val);
 
-    lastSource = "MQTT";
-    lastTime = Date.now();
-
     lastData.source = "MQTT";
 
     console.log("📡 MQTT:", lastData);
 
-    await Data.create(lastData);
+    await Data.create({ ...lastData });
 
   } catch (err) {
     console.log("❌ MQTT Error:", err.message);
   }
 });
 
-// ===== GSM HTTP =====
-app.get('/update', async (req, res) => {
-  try {
-
-    if (lastSource === "MQTT" && Date.now() - lastTime < 5000) {
-      return res.send("SKIP");
-    }
-
-    const flow = Number(req.query.flow) || 0;
-    const total = Number(req.query.total) || 0;
-    const alarm = Number(req.query.alarm) || 0;
-
-    const data = {
-      flow,
-      total,
-      alarm,
-      source: "GSM"
-    };
-
-    lastData = data;
-
-    lastSource = "GSM";
-    lastTime = Date.now();
-
-    console.log("📲 GSM:", data);
-
-    await Data.create(data);
-
-    res.send("OK");
-
-  } catch (err) {
-    console.log("❌ GSM Error:", err.message);
-    res.status(500).send("ERROR");
-  }
-});
-
-// ===== AUTH =====
+// ======================
+// AUTH
+// ======================
 function auth(req, res, next) {
   const token = req.headers.authorization;
   if (!token) return res.status(401).json({ msg: "No token" });
@@ -115,7 +85,9 @@ function auth(req, res, next) {
   }
 }
 
-// ===== LOGIN =====
+// ======================
+// LOGIN
+// ======================
 app.post('/login', (req, res) => {
   const { username, password } = req.body;
 
@@ -127,24 +99,63 @@ app.post('/login', (req, res) => {
   res.status(401).json({ msg: "Login gagal" });
 });
 
-// ===== API =====
+// ======================
+// ROOT
+// ======================
 app.get('/', (req, res) => {
-  res.send("API Smart Water 🚀");
+  res.send("🚀 Smart Water API Running");
 });
 
+// ======================
+// LATEST
+// ======================
 app.get('/latest', (req, res) => {
   res.json(lastData);
 });
 
+// ======================
+// HISTORY
+// ======================
 app.get('/history', auth, async (req, res) => {
-  const data = await Data.find().sort({ time: -1 }).limit(200);
+  const data = await Data.find().sort({ time: -1 }).limit(50);
   res.json(data);
 });
 
+// ======================
+// GSM ENDPOINT
+// ======================
+app.get('/update', async (req, res) => {
+  try {
+    const { flow, total, alarm } = req.query;
+
+    const data = {
+      flow: Number(flow),
+      total: Number(total),
+      alarm: Number(alarm),
+      source: "GSM"
+    };
+
+    lastData = data;
+
+    console.log("📡 GSM:", data);
+
+    await Data.create(data);
+
+    res.json({ status: "OK GSM" });
+
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ======================
+// EXPORT CSV
+// ======================
 app.get('/export', async (req, res) => {
-  const data = await Data.find().limit(200);
+  const data = await Data.find().limit(100);
 
   let csv = "flow,total,alarm,source,time\n";
+
   data.forEach(d => {
     csv += `${d.flow},${d.total},${d.alarm},${d.source},${d.time}\n`;
   });
@@ -154,7 +165,49 @@ app.get('/export', async (req, res) => {
   res.send(csv);
 });
 
-// ===== START =====
+// ======================
+// WEEKLY (LITER)
+// ======================
+app.get('/weekly', async (req, res) => {
+
+  const data = await Data.find({
+    time: { $gte: new Date(Date.now() - 7*24*60*60*1000) }
+  });
+
+  let result = {};
+
+  data.forEach(d => {
+    const day = new Date(d.time).toLocaleDateString();
+
+    if (!result[day]) result[day] = 0;
+
+    result[day] += d.flow;
+  });
+
+  res.json(result);
+});
+
+// ======================
+// STATS (MQTT vs GSM)
+// ======================
+app.get('/stats', async (req, res) => {
+
+  const data = await Data.find();
+
+  let mqtt = 0;
+  let gsm = 0;
+
+  data.forEach(d => {
+    if (d.source === "MQTT") mqtt++;
+    if (d.source === "GSM") gsm++;
+  });
+
+  res.json({ mqtt, gsm });
+});
+
+// ======================
+// START SERVER
+// ======================
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
