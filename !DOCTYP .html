@@ -3,40 +3,32 @@
 <head>
   <title>Smart Water</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <link rel="manifest" href="manifest.json">
 
   <style>
     body { background:#0f172a; color:white; text-align:center; font-family:Arial; }
-    .card { background:#1e293b; padding:20px; margin:10px; border-radius:10px; display:inline-block; }
-    .alarm { color:red; font-weight:bold; }
+    .card { background:#1e293b; padding:20px; margin:10px; border-radius:10px; display:inline-block; width:180px;}
+    .danger { color:red; }
+    .safe { color:lightgreen; }
+    .mode { color:cyan; }
   </style>
 </head>
 
 <body>
 
-<h1>💧 Smart Water</h1>
+<h1>💧 Smart Water Dashboard</h1>
 
-<div id="loginBox">
-  <input id="user" placeholder="username">
-  <input id="pass" type="password" placeholder="password">
-  <button onclick="login()">Login</button>
-</div>
+<div class="card">Flow <h2 id="flow">0</h2></div>
+<div class="card">Total <h2 id="total">0</h2></div>
+<div class="card">Status <h2 id="alarm">NORMAL</h2></div>
+<div class="card">Mode <h2 id="mode">-</h2></div>
+<div class="card">7 Hari <h2 id="weekly">0 L</h2></div>
 
-<div id="dashboard" style="display:none;">
-
-  <div class="card">Flow <h2 id="flow">0</h2></div>
-  <div class="card">Total <h2 id="total">0</h2></div>
-  <div class="card">Status <h2 id="alarm">NORMAL</h2></div>
-
-  <button onclick="downloadCSV()">Download CSV</button>
-
-  <canvas id="chart"></canvas>
-
-</div>
+<canvas id="chart"></canvas>
 
 <script>
-const API = "http://localhost:3000";
-let token="";
+
+const API = "https://smartwatermeter-production.up.railway.app";
+let token = "";
 
 let chart = new Chart(document.getElementById('chart'), {
   type:'line',
@@ -47,15 +39,12 @@ function login(){
   fetch(API+"/login",{
     method:"POST",
     headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({username:user.value,password:pass.value})
+    body:JSON.stringify({username:"admin",password:"1234"})
   })
   .then(res=>res.json())
   .then(d=>{
-    if(!d.token){alert("Login gagal");return;}
-    token=d.token;
-    loginBox.style.display="none";
-    dashboard.style.display="block";
-    loadHistory();
+    token = d.token;
+    loadWeekly();
     setInterval(update,2000);
   });
 }
@@ -64,21 +53,23 @@ async function update(){
   const res=await fetch(API+"/latest");
   const d=await res.json();
 
-  flow.innerText=d.flow.toFixed(2);
-  total.innerText=d.total.toFixed(2);
+  flow.innerText=d.flow.toFixed(2)+" L/min";
+  total.innerText=d.total.toFixed(2)+" L";
 
   if(d.alarm==1){
     alarm.innerText="ALARM 🚨";
-    alarm.classList.add("alarm");
+    alarm.className="danger";
   }else{
     alarm.innerText="NORMAL";
-    alarm.classList.remove("alarm");
+    alarm.className="safe";
   }
+
+  mode.innerText=d.source;
 
   chart.data.labels.push(new Date().toLocaleTimeString());
   chart.data.datasets[0].data.push(d.flow);
 
-  if(chart.data.labels.length>15){
+  if(chart.data.labels.length>20){
     chart.data.labels.shift();
     chart.data.datasets[0].data.shift();
   }
@@ -86,21 +77,29 @@ async function update(){
   chart.update();
 }
 
-async function loadHistory(){
+async function loadWeekly(){
   const res=await fetch(API+"/history",{headers:{Authorization:token}});
   const data=await res.json();
 
-  data.reverse().forEach(d=>{
-    chart.data.labels.push(new Date(d.time).toLocaleTimeString());
-    chart.data.datasets[0].data.push(d.flow);
-  });
+  const now=new Date();
+  const lastWeek=new Date();
+  lastWeek.setDate(now.getDate()-7);
 
-  chart.update();
+  let filtered=data.filter(d=>new Date(d.time)>=lastWeek);
+
+  if(filtered.length<2){
+    weekly.innerText="0 L";
+    return;
+  }
+
+  let totals=filtered.map(d=>d.total);
+  let usage=Math.max(...totals)-Math.min(...totals);
+
+  weekly.innerText=usage.toFixed(2)+" L";
 }
 
-function downloadCSV(){
-  window.open(API+"/export");
-}
+login();
+
 </script>
 
 </body>
